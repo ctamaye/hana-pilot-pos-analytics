@@ -1,0 +1,18 @@
+name: hana-pilot-ml
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.12
+  - numpy
+  - pandas
+  - scipy
+  - scikit-learn
+  - statsmodels
+  - matplotlib
+  - seaborn
+  - plotly
+  - jupyterlab
+  - ipykernel
+  - tqdm
+  - pyarrow

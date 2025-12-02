@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+.env
+.venv
+venv/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Data - do NOT commit real raw client data
+data/raw/
+data/interim/
+data/processed/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Models / logs
+models/
+logs/
+
+# Secrets (if any)
+*.env
+.env.*
