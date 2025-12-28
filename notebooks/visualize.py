@@ -365,7 +365,7 @@ class VisualObj:
 #------------------------------------ Run Script ------------------------------------
 # Import and prepare data for test
 os.chdir(r'/Users/cody/Desktop/Projects/hana-pilot-pos-analytics/data/raw')
-line_items = pd.read_csv('indian_food_pos_raw.csv')
+line_items = pd.read_csv('indian_food_pos_raw.csv') #https://www.kaggle.com/datasets/rajatsurana979/fast-food-sales-report?utm_source=chatgpt.com#
 
 
 if __name__ == '__main__':
