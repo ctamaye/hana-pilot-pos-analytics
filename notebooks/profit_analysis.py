@@ -28,18 +28,40 @@ input:
 '''
 class ItemRevenueObj:
     def __init__(self, pos_df, col_names, item = None, start_date = None, end_date = None): #format: YYYY-MM-DD
-        self.df = pos_df.rename(columns = col_names).copy()
-        self.df_filtered = self.df.copy()
+        self.df = pos_df.rename(columns = col_names).copy()        
         
+        # Check and reformat datetimes
+        try:
+            self.df['order_datetime'] = pd.to_datetime(self.df['order_datetime'])
+        except ValueError:
+            self.df['order_datetime'] = self.df['order_datetime'].apply(lambda x: x.replace(' ', ''))
+            self.df['order_datetime'] = self.df['order_datetime'].apply(lambda x: x.replace('/', '-'))
+            self.df['order_datetime'] = pd.to_datetime(self.df['order_datetime'])
+            print('Datetime column reformatted successfully.\n')
+        else:
+            print('Check datetime column again.\n')
+        self.df['order_datetime'] = pd.to_datetime(self.df['order_datetime'])
+
+        if start_date is not None:
+            start_date = pd.to_datetime(start_date)
+        if end_date is not None:
+            end_date = pd.to_datetime(end_date)
+
         # If start_date and end_date are provided, then filter
         if (start_date is not None) and (end_date is not None):
-            self.df_filtered = self.df_filtered.loc[(self.df_filtered['order_datetime'] >= start_date) &
-                                  (self.df_filtered['order_datetime'] <= end_date)].copy()
+            self.df = self.df.loc[(self.df['order_datetime'] >= start_date) &
+                                  (self.df['order_datetime'] <= end_date)].copy()
+            
         elif (start_date is None) and (end_date is not None):
-            self.df_filtered = self.df_filtered.loc[self.df_filtered['order_datetime'] <= end_date]
+            self.df = self.df.loc[self.df['order_datetime'] <= end_date]
+            
         elif (start_date is not None) and (end_date is None):
-            self.df_filtered = self.df_filtered.loc[self.df_filtered['order_datetime'] >= start_date]
-    
+            self.df = self.df.loc[self.df['order_datetime'] >= start_date]
+
+
+        self.df_filtered = self.df.copy()
+
+
         # If item is specified then, filter for that item
         if item is not None:
             self.df_filtered = self.df_filtered.loc[self.df_filtered['item_name'] == item].copy()
@@ -48,9 +70,8 @@ class ItemRevenueObj:
     def total_revenue(self):
         current_item_total_revenue = (
             self.df_filtered
-                .groupby('item_name')['line_total']
+                .groupby('item_name', as_index = False)['line_total']
                 .sum()
-                .reset_index(drop = True)
                 .rename(columns = {'line_total': 'total_revenue'})
             )
         return current_item_total_revenue
@@ -58,10 +79,9 @@ class ItemRevenueObj:
     # % of Total Revenue
     def pct_total_revenue(self):
         total_revenues = (
-            self.df_filtered
-                .groupby('item_name')['line_total']
+            self.df
+                .groupby('item_name', as_index = False)['line_total']
                 .sum()
-                .reset_index(drop = True)
                 .rename(columns = {'line_total': 'total_revenue'})
             )
         total = total_revenues['total_revenue'].sum()
@@ -70,29 +90,124 @@ class ItemRevenueObj:
         return total_revenues
     
     # Total Quantity Sold
-    def toal_quantites_sold(self):
+    def total_quantites_sold(self):
         total_quantities = (           
                 self.df_filtered
-                    .groupby('item_name')['quantity']
+                    .groupby('item_name', as_index = False)['quantity']
                     .sum()
-                    .reset_index(drop = True)
                     .rename(columns = {'quantity': 'total_quantity_sold'})
                 )
         return total_quantities
 
-# Average Transaction Contribution
+    # Average ticket contribution (avg share of order total when item appears)
+    def avg_ticket_contribution(self):
+        # revenue per (order, item)
+        item_order_rev = (
+            self.df_filtered
+                .groupby(['order_id', 'item_name'], as_index=False)['line_total']
+                .sum()
+        )
 
-# Sales Frequency
-    def sales_frequency(self, time_span: list(['Monthly'])):
-        if time_span == 'Monthly':
+        # total revenue per order (from full df in window, not df_filtered)
+        order_totals = self.df.groupby('order_id')['line_total'].sum()
+
+        item_order_rev['ticket_total'] = item_order_rev['order_id'].map(order_totals)
+        item_order_rev['ticket_share'] = item_order_rev['line_total'] / item_order_rev['ticket_total']
+
+        avg_share = (
+            item_order_rev
+                .groupby('item_name', as_index=False)['ticket_share']
+                .mean()
+                .rename(columns={'ticket_share': 'avg_ticket_share'})
+        )
+        return avg_share
+    
+    # Sales Frequency: unique orders per week/month
+    def order_frequency_over_time(self, time_span: str):
+        if time_span == 'Weekly':
+            grp = pd.Grouper(key='order_datetime', freq='W-MON', label='left')
+        elif time_span == 'Monthly':
+            grp = pd.Grouper(key='order_datetime', freq='MS')
+        else:
+            raise ValueError("time_span must be 'Weekly' or 'Monthly'")
+    
+        return (
+            self.df_filtered
+                .groupby(['item_name', grp], as_index=False)['order_id']
+                .nunique()
+                .rename(columns={'order_id': 'order_frequency'})
+        )
+
             
 
-# Revenue Volatility (std dev over time)
+    # Revenue volatility over time: std dev of weekly/monthly item revenue
+    def revenue_volatility(self, time_span: str):
+        if time_span == 'Weekly':
+            ts = (
+                self.df_filtered
+                    .groupby(['item_name', pd.Grouper(key='order_datetime', freq='W-MON', label='left')])['line_total']
+                    .sum()
+                    .reset_index()
+            )
+        elif time_span == 'Monthly':
+            ts = (
+                self.df_filtered
+                    .groupby(['item_name', pd.Grouper(key='order_datetime', freq='MS')])['line_total']
+                    .sum()
+                    .reset_index()
+            )
+        else:
+            raise ValueError("time_span must be 'Weekly' or 'Monthly'")
 
-# Combine to return merged dfs
+        vol = (
+            ts.groupby('item_name', as_index=False)['line_total']
+              .std()
+              .rename(columns={'line_total': f'revenue_volatility_std_{time_span.lower()}'})
+        )
+        return vol
+
+
+    # Revenue Trend
+    def revenue_trend(self, time_span: str):
+        if time_span == 'Weekly':
+            rev_trend = self.df_filtered.groupby(['item_name', pd.Grouper(key = 'order_datetime', freq = 'W-MON', label = 'left')])['line_total'].sum().reset_index()
+        elif time_span == 'Monthly':
+            rev_trend = self.df_filtered.groupby(['item_name', pd.Grouper(key = 'order_datetime', freq = 'MS')])['line_total'].sum().reset_index()
+
+        return rev_trend
+
+    # Order Frequency: number of unique orders that include the item
+    def order_frequency(self):
+        order_freq = (
+            self.df_filtered
+                .groupby('item_name', as_index=False)['order_id']
+                .nunique()
+                .rename(columns={'order_id': 'order_frequency'})
+        )
+        return order_freq
+    
+    # Merge and hand downstream as a single table 
+    def build_truth_table(self, volatility_span: str = "Weekly"):
+        total_rev = self.total_revenue()
+        pct_rev = self.pct_total_revenue()[['item_name', 'pct_total_revenue']]
+        qty = self.total_quantites_sold()
+        orders = self.order_frequency()
+        ticket = self.avg_ticket_contribution()
+        vol = self.revenue_volatility(volatility_span)
+    
+        truth = total_rev.merge(pct_rev, on='item_name', how='left') \
+                         .merge(qty, on='item_name', how='left') \
+                         .merge(orders, on='item_name', how='left') \
+                         .merge(ticket, on='item_name', how='left') \
+                         .merge(vol, on='item_name', how='left')
+    
+        return truth.sort_values('total_revenue', ascending=False)
+
 
 # ******************************************* Testing *******************************************
 if __name__ == '__main__':
     os.chdir(r'/Users/cody/Desktop/Projects/hana-pilot-pos-analytics/data/raw')
     line_items = pd.read_csv('indian_food_pos_raw.csv') #https://www.kaggle.com/datasets/rajatsurana979/fast-food-sales-report?utm_source=chatgpt.com#
 
+    test_obj = ItemRevenueObj(line_items, col_names)
+    truth = test_obj.build_truth_table()
