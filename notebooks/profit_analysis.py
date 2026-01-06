@@ -40,7 +40,10 @@ class ItemRevenueObj:
             print('Datetime column reformatted successfully.\n')
         else:
             print('Check datetime column again.\n')
-        self.df['order_datetime'] = pd.to_datetime(self.df['order_datetime'])
+
+        # Add day of week and weekend flags
+        self.df['Day of Week'] = self.df['order_datetime'].dt.day_name()
+        self.df['Weekend?'] = self.df['Day of Week'].apply(lambda x: 1 if (x == 'Saturday') or (x == 'Sunday') else 0)
 
         if start_date is not None:
             start_date = pd.to_datetime(start_date)
@@ -173,8 +176,23 @@ class ItemRevenueObj:
             rev_trend = self.df_filtered.groupby(['item_name', pd.Grouper(key = 'order_datetime', freq = 'W-MON', label = 'left')])['line_total'].sum().reset_index()
         elif time_span == 'Monthly':
             rev_trend = self.df_filtered.groupby(['item_name', pd.Grouper(key = 'order_datetime', freq = 'MS')])['line_total'].sum().reset_index()
+            
+        rev_trend_pivot = rev_trend.pivot(index = 'order_datetime', columns = 'item_name', values = 'line_total')
+        rev_trend_pivot = rev_trend_pivot.fillna(0) #if the item didn't sell that week, then total revenue of item is 0
+        
+        return rev_trend_pivot
 
-        return rev_trend
+    # Quantity Trend
+    def quantity_trend(self, time_span: str):
+        if time_span == 'Weekly':
+            quant_trend = self.df_filtered.groupby(['item_name', pd.Grouper(key = 'order_datetime', freq = 'W-MON', label = 'left')])['quantity'].sum().reset_index()
+        elif time_span == 'Monthly':
+            quant_trend = self.df_filtered.groupby(['item_name', pd.Grouper(key = 'order_datetime', freq = 'MS')])['quantity'].sum().reset_index()
+        
+        quant_trend_pivot = quant_trend.pivot(index = 'order_datetime', columns = 'item_name', values = 'line_total')
+        quant_trend_pivot = quant_trend_pivot.fillna(0) #if the item didn't sell that week, then total quantity of item is 0
+
+        return quant_trend_pivot
 
     # Order Frequency: number of unique orders that include the item
     def order_frequency(self):
@@ -185,6 +203,7 @@ class ItemRevenueObj:
                 .rename(columns={'order_id': 'order_frequency'})
         )
         return order_freq
+        
     
     # Merge and hand downstream as a single table 
     def build_truth_table(self, volatility_span: str = "Weekly"):
