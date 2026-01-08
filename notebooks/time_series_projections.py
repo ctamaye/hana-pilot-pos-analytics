@@ -12,6 +12,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 from statsmodels.tsa.stattools import adfuller
+from statsmodels.graphics.tsaplots import plot_acf, plot_pacf
 
 import profit_analysis
 
@@ -90,6 +91,7 @@ def stationarity_pipeline(
     rev_wide = rev_wide.sort_index().asfreq(asfreq_rule, fill_value=0)
 
     summary_rows = []
+    differenced_list = []
 
     for item in rev_wide.columns:
         y = rev_wide[item].astype(float)
@@ -122,6 +124,8 @@ def stationarity_pipeline(
             plt.show()
 
         y_final, d_used, results = difference_until_stationary(y, max_d=max_d, alpha=alpha)
+        if d_used > 0:
+            differenced_list.append(y_final)
 
         # Plot differenced series (if differenced)
         if plot and d_used > 0:
@@ -143,8 +147,41 @@ def stationarity_pipeline(
         })
 
     summary = pd.DataFrame(summary_rows).sort_values(["status", "p_final"], ascending=[True, True])
-    return rev_wide, summary
+    differenced_df = pd.concat(differenced_list)
+    
+    return rev_wide, summary, differenced_df
 
+def plot_differenced_rev(differenced_df):
+    if isinstance(differenced_df, pd.DataFrame): #if DataFrame
+        for current_item in differenced_df.columns:
+            current_differenced = differenced_df[current_item].copy()
+            
+            plt.figure(figsize=(12, 4))
+            plt.plot(current_differenced.index, current_differenced.values, color = 'orange')
+            plt.title(f"Differenced Weekly Revenue Over Time — {current_item}")
+            plt.xlabel("Week")
+            plt.ylabel("Differenced Revenue (Rupees)")
+            plt.tight_layout()
+            plt.show()
+    else:
+            plt.figure(figsize=(12, 4))
+            plt.plot(differenced_df.index, differenced_df.values, color = 'orange')
+            plt.title(f"Differenced Weekly Revenue Over Time — {differenced_df.name}")
+            plt.xlabel("Week")
+            plt.ylabel("Differenced Revenue (Rupees)")
+            plt.tight_layout()
+            plt.show()
+
+def autocorrelation_func():
+    # # Plot ACF and PACF for the differenced series
+    # fig, axes = plt.subplots(1, 2, figsize=(16, 4))
+    # # ACF plot
+    # plot_acf(data['Close_Diff'].dropna(), lags=40, ax=axes[0])axes[0].set_title('Autocorrelation Function (ACF)')
+    # # PACF plot
+    # plot_pacf(data['Close_Diff'].dropna(), lags=40, ax=axes[1])axes[1].set_title('Partial Autocorrelation Function (PACF)')
+    
+    # plt.tight_layout()
+    # plt.show()
 
 # ----------------------------------- Testing -----------------------------------
 if __name__ == "__main__":
@@ -159,7 +196,7 @@ if __name__ == "__main__":
         "item_name": "item_name",
     }
 
-    rev_wide, summary = stationarity_pipeline(
+    rev_wide, summary, differenced_df = stationarity_pipeline(
         line_items,
         col_names,
         time_span="Weekly",
@@ -169,6 +206,8 @@ if __name__ == "__main__":
         asfreq_rule="W-MON",
         plot=True
     )
+
+    plot_differenced_rev(differenced_df)
 
     print("\nStationarity summary (top 25):")
     print(summary.head(25))
