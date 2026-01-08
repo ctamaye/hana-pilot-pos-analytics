@@ -1,93 +1,174 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Created on Wed Dec 17 17:33:38 2025
-
-@author: cody
+Stationarity + differencing prep for weekly item revenue series.
+Integrates with profit_analysis.ItemRevenueObj.revenue_trend(), which returns
+a pivoted wide dataframe: index=order_datetime (weekly), columns=item_name.
 """
-# Basic modules
-import matplotlib.pyplot as plt
-import seaborn as sns
-import pandas as pd
-import numpy as np 
+
 import os
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+
+from statsmodels.tsa.stattools import adfuller
+
 import profit_analysis
 
-# Statistical and ARIMA modules
-from statsmodels.tsa.stattools import adfuller
-from statsmodels.graphics.tsaplots import plot_acf, plot_pacf
-from statsmodels.tsa.arima.model import ARIMA
-from sklearn.metrics import mean_squared_error
-'''
-The following function projects the next week's sales performance by item based on the existing data.
-This is done by using an Autoregressive Integrated Moving Average (ARIMA) model
 
-Input: DataFrame with weekly revenues for each item
-Output:
-    - A plot showing the prediction estimated for the next time frame
-    - Print projections to console
-'''
+def adf_test(series: pd.Series, label: str, alpha: float = 0.05) -> dict:
+    """
+    Run ADF test and return results in a dict (and print summary).
+    """
+    s = series.dropna()
+    result = adfuller(s, autolag="AIC")
+    out = {
+        "label": label,
+        "adf_stat": result[0],
+        "p_value": result[1],
+        "used_lag": result[2],
+        "n_obs": result[3],
+        "crit_vals": result[4],
+        "stationary": result[1] < alpha,
+    }
 
-# ARIMA model
-def arima_proj(df, col_names):
-    proj_obj = profit_analysis.ItemRevenueObj(df, col_names)
-    rev_trend = proj_obj.revenue_trend(time_span = 'Weekly')
-    
-    for current_item in rev_trend.columns:
-        current_rev = rev_trend[current_item]
-        
-        plt.figure(figsize = (12, 5))
-        plt.plot(current_rev.index, current_rev)
-        plt.title(f'Weekly Revenue for {current_item}')
-        plt.xlabel('Date')
-        plt.ylabel('Weekly Revenue (Rupees)')
-        plt.show()
+    print(f"ADF — {label}")
+    print(f"  ADF Statistic: {out['adf_stat']:.4f}")
+    print(f"  p-value:       {out['p_value']:.4f}")
+    print(f"  Stationary?    {'YES' if out['stationary'] else 'NO'}\n")
+    return out
 
-        print(f'\n**************** Checking Stationarity for {current_item} Series ****************\n')
 
-        # Perform the Augmented Dickey-Fuller test on the original series
-        result_original = adfuller(current_rev)
-        print(f"ADF Statistic (Original): {result_original[0]:.4f}")
-        print(f"p-value (Original): {result_original[1]:.4f}")
-        if result_original[1] < 0.05:    
-            print("Interpretation: The original series is Stationary.\n")
-        else:   
-            print("Interpretation: The original series is Non-Stationary.\n")
-            
-        # Perform the Augmented Dickey-Fuller test on the differenced series
-        result_diff = adfuller(current_rev.dropna())
-        print(f"ADF Statistic (Differenced): {result_diff[0]:.4f}")
-        print(f"p-value (Differenced): {result_diff[1]:.4f}")
-        if result_diff[1] < 0.05:    
-            print("Interpretation: The differenced series is Stationary.\n")
-        else:    
-            print("Interpretation: The differenced series is Non-Stationary.\n")
-            
-        # Plotting the differenced Close price
-        
-        
-        plt.figure(figsize=(14, 7))
-        plt.plot(current_rev.index, current_rev, label = f'Differenced Weekly Revenues for {current_item}', color='orange')
-        plt.title(f'Differenced Weekly Revenues for {current_item} Over Time')
-        plt.xlabel('Date')
-        plt.ylabel('Differenced Weekly Revenue (Rupees)')
-        plt.legend()
-        plt.show()
-        
-    return rev_trend
-    
-    
-# ******************************************* Testing *******************************************
-if __name__ == '__main__':
-    os.chdir(r'/Users/cody/Desktop/Projects/hana-pilot-pos-analytics/data/raw')
-    line_items = pd.read_csv('indian_food_pos_raw.csv') #https://www.kaggle.com/datasets/rajatsurana979/fast-food-sales-report?utm_source=chatgpt.com#
+def difference_until_stationary(series: pd.Series, max_d: int = 2, alpha: float = 0.05):
+    """
+    Apply differencing iteratively until ADF indicates stationarity or max_d reached.
+    Returns: (final_series, d_used, results_list)
+    """
+    results = []
+    current = series.astype(float)
+
+    # Original
+    results.append(adf_test(current, "original", alpha=alpha))
+    if results[-1]["stationary"]:
+        return current, 0, results
+
+    # Differencing loop
+    for d in range(1, max_d + 1):
+        current = current.diff()
+        current = current.dropna()
+        results.append(adf_test(current, f"diff(d={d})", alpha=alpha))
+        if results[-1]["stationary"]:
+            return current, d, results
+
+    return current, max_d, results
+
+
+def stationarity_pipeline(
+    df: pd.DataFrame,
+    col_names: dict,
+    time_span: str = "Weekly",
+    max_d: int = 2,
+    alpha: float = 0.05,
+    min_nonzero_periods: int = 8,
+    asfreq_rule: str = "W-MON",
+    plot: bool = True,
+):
+    """
+    Build weekly revenue series per item using profit_analysis, then
+    test/difference per item.
+
+    Returns:
+      - rev_wide: wide revenue df (index=time, columns=item)
+      - summary: per-item differencing/stationarity summary dataframe
+    """
+    obj = profit_analysis.ItemRevenueObj(df, col_names)
+    rev_wide = obj.revenue_trend(time_span=time_span)  # already pivoted + filled with 0 in your profit_analysis
+
+    # Ensure index is datetime + regular weekly frequency.
+    # (Your revenue_trend builds weeks via Grouper; this makes gaps explicit)
+    rev_wide.index = pd.to_datetime(rev_wide.index)
+    rev_wide = rev_wide.sort_index().asfreq(asfreq_rule, fill_value=0)
+
+    summary_rows = []
+
+    for item in rev_wide.columns:
+        y = rev_wide[item].astype(float)
+
+        # Skip items with too little signal (mostly zeros)
+        nonzero = int((y > 0).sum())
+        if nonzero < min_nonzero_periods:
+            summary_rows.append({
+                "item_name": item,
+                "status": "skipped_low_signal",
+                "nonzero_periods": nonzero,
+                "d_used": np.nan,
+                "p_original": np.nan,
+                "p_final": np.nan,
+            })
+            continue
+
+        print("\n" + "=" * 90)
+        print(f"ITEM: {item} | nonzero periods: {nonzero}")
+        print("=" * 90)
+
+        # Plot original series
+        if plot:
+            plt.figure(figsize=(12, 4))
+            plt.plot(y.index, y.values)
+            plt.title(f"Weekly Revenue (Original) — {item}")
+            plt.xlabel("Week")
+            plt.ylabel("Revenue")
+            plt.tight_layout()
+            plt.show()
+
+        y_final, d_used, results = difference_until_stationary(y, max_d=max_d, alpha=alpha)
+
+        # Plot differenced series (if differenced)
+        if plot and d_used > 0:
+            plt.figure(figsize=(12, 4))
+            plt.plot(y_final.index, y_final.values)
+            plt.title(f"Weekly Revenue (Differenced d={d_used}) — {item}")
+            plt.xlabel("Week")
+            plt.ylabel("Differenced Revenue")
+            plt.tight_layout()
+            plt.show()
+
+        summary_rows.append({
+            "item_name": item,
+            "status": "ok",
+            "nonzero_periods": nonzero,
+            "d_used": int(d_used),
+            "p_original": float(results[0]["p_value"]),
+            "p_final": float(results[-1]["p_value"]),
+        })
+
+    summary = pd.DataFrame(summary_rows).sort_values(["status", "p_final"], ascending=[True, True])
+    return rev_wide, summary
+
+
+# ----------------------------------- Testing -----------------------------------
+if __name__ == "__main__":
+    os.chdir(r"/Users/cody/Desktop/Projects/hana-pilot-pos-analytics/data/raw")
+    line_items = pd.read_csv("indian_food_pos_raw.csv")
 
     col_names = {
-        'order_id': 'order_id',
-        'date': 'order_datetime',
-        'transaction_amount': 'line_total',
-        'quantity': 'quantity',
-        'item_name':'item_name'
-        }
+        "order_id": "order_id",
+        "date": "order_datetime",
+        "transaction_amount": "line_total",
+        "quantity": "quantity",
+        "item_name": "item_name",
+    }
 
-    rev_trend = arima_proj(line_items, col_names)
+    rev_wide, summary = stationarity_pipeline(
+        line_items,
+        col_names,
+        time_span="Weekly",
+        max_d=2,
+        alpha=0.05,
+        min_nonzero_periods=8,
+        asfreq_rule="W-MON",
+        plot=True
+    )
+
+    print("\nStationarity summary (top 25):")
+    print(summary.head(25))

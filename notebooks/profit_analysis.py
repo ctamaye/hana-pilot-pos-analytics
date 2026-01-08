@@ -189,7 +189,7 @@ class ItemRevenueObj:
         elif time_span == 'Monthly':
             quant_trend = self.df_filtered.groupby(['item_name', pd.Grouper(key = 'order_datetime', freq = 'MS')])['quantity'].sum().reset_index()
         
-        quant_trend_pivot = quant_trend.pivot(index = 'order_datetime', columns = 'item_name', values = 'line_total')
+        quant_trend_pivot = quant_trend.pivot(index = 'order_datetime', columns = 'item_name', values = 'quantity')
         quant_trend_pivot = quant_trend_pivot.fillna(0) #if the item didn't sell that week, then total quantity of item is 0
 
         return quant_trend_pivot
